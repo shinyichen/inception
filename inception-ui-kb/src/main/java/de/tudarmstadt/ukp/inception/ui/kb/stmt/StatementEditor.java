@@ -19,12 +19,18 @@ package de.tudarmstadt.ukp.inception.ui.kb.stmt;
 
 import static org.apache.commons.lang3.StringUtils.isNotEmpty;
 
+import java.net.URI;
+import java.util.Calendar;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
 import org.apache.wicket.Component;
 import org.apache.wicket.ajax.AjaxRequestTarget;
 import org.apache.wicket.event.Broadcast;
 import org.apache.wicket.markup.html.basic.Label;
 import org.apache.wicket.markup.html.form.Form;
-import org.apache.wicket.markup.html.form.TextArea;
+import org.apache.wicket.markup.html.form.NumberTextField;
 import org.apache.wicket.markup.html.form.TextField;
 import org.apache.wicket.markup.html.panel.Fragment;
 import org.apache.wicket.markup.html.panel.Panel;
@@ -33,11 +39,19 @@ import org.apache.wicket.model.IModel;
 import org.apache.wicket.model.Model;
 import org.apache.wicket.request.cycle.RequestCycle;
 import org.apache.wicket.spring.injection.annot.SpringBean;
+import org.apache.wicket.validation.IValidatable;
+import org.apache.wicket.validation.IValidator;
+import org.apache.wicket.validation.ValidationError;
+import org.eclipse.rdf4j.model.vocabulary.XMLSchema;
+
+import com.googlecode.wicket.kendo.ui.form.combobox.ComboBox;
+import com.googlecode.wicket.kendo.ui.form.datetime.DatePicker;
 
 import de.tudarmstadt.ukp.clarin.webanno.support.lambda.LambdaAjaxButton;
 import de.tudarmstadt.ukp.clarin.webanno.support.lambda.LambdaAjaxFormComponentUpdatingBehavior;
 import de.tudarmstadt.ukp.clarin.webanno.support.lambda.LambdaAjaxLink;
 import de.tudarmstadt.ukp.inception.kb.KnowledgeBaseService;
+import de.tudarmstadt.ukp.inception.kb.graph.KBProperty;
 import de.tudarmstadt.ukp.inception.kb.graph.KBStatement;
 import de.tudarmstadt.ukp.inception.kb.model.KnowledgeBase;
 import de.tudarmstadt.ukp.inception.ui.kb.event.AjaxStatementChangedEvent;
@@ -111,11 +125,11 @@ public class StatementEditor extends Panel {
 
     private void actionSave(AjaxRequestTarget aTarget, Form<KBStatement> aForm) {
         KBStatement modifiedStatement = aForm.getModelObject();
-
+        
         // persist the modified statement and replace the original, unchanged model
         kbService.upsertStatement(kbModel.getObject(), modifiedStatement);
         statement.setObject(modifiedStatement);
-
+        
         // switch back to ViewMode and send notification to listeners
         actionCancelExistingStatement(aTarget);
         send(getPage(), Broadcast.BREADTH,
@@ -180,7 +194,7 @@ public class StatementEditor extends Panel {
         private static final long serialVersionUID = 2489925553729209190L;
 
         private Component initialFocusComponent;
-
+        private Fragment editCont;
         /**
          * Creates a new fragement for editing a statement.<br>
          * The editor has two slightly different behaviors, depending on the value of
@@ -205,15 +219,27 @@ public class StatementEditor extends Panel {
 
             Form<KBStatement> form = new Form<>("form", CompoundPropertyModel.of(aStatement));
 
+            
+            //Determine datatype
+            KBProperty prop = kbService.readProperty(kbModel.getObject(),
+                aStatement.getObject().getProperty().getIdentifier()).get();
+           
+            // Get editor depending on datatype
+            editCont = getValueEditorForDataType(prop.getRange(), "value");
+            
             // text area for the statement value should receive focus
-            Component valueTextArea = new TextArea<String>("value").add(
-                    new LambdaAjaxFormComponentUpdatingBehavior("change", t -> t.add(getParent())));
-            initialFocusComponent = valueTextArea;
-            form.add(valueTextArea);
+            initialFocusComponent = editCont.get("value");
 
             // FIXME This field should only be visible if the selected datatype is
             // langString
-            form.add(new TextField<>("language"));
+            form.add(new TextField<String>("language") {
+                private static final long serialVersionUID = 5032496338439725046L;
+
+                @Override
+                protected void onConfigure() {
+                    setVisible(XMLSchema.STRING.stringValue().equals(prop.getRange().toString()));
+                }
+            });
 
             // FIXME Selection of the data type should only be possible if it is not
             // restricted to a single type in the property definition - take into account
@@ -237,6 +263,8 @@ public class StatementEditor extends Panel {
             }));
             form.add(new LambdaAjaxLink("delete", StatementEditor.this::actionDelete)
                     .setVisibilityAllowed(!isNewStatement));
+            
+            form.add(editCont);
             add(form);
         }
 
@@ -244,5 +272,59 @@ public class StatementEditor extends Panel {
         public Component getFocusComponent() {
             return initialFocusComponent;
         }
+            
+        private Fragment getValueEditorForDataType(URI dataType, String markupId) {
+            Fragment editorFragment = new Fragment("editCont", "editorStringMode",
+                    StatementEditor.this);
+            Component valueEditor;
+
+            String dataTypeName = dataType.toString();
+
+            if (XMLSchema.STRING.stringValue().equals(dataTypeName)) {
+                valueEditor = new TextField<>(markupId);
+            } 
+            else if (XMLSchema.INTEGER.stringValue().equals(dataTypeName)) {
+                // switch the fragment because we need a type=number input in html
+                editorFragment = new Fragment("editCont", "editorNumberMode", StatementEditor.this);
+                valueEditor = new NumberTextField<Integer>(markupId).setType(Integer.class);
+            } 
+            else if (XMLSchema.DATE.stringValue().equals(dataTypeName)) {
+                valueEditor = new DatePicker(markupId);
+            } 
+            else if (XMLSchema.GYEAR.stringValue().equals(dataTypeName)) {
+                // Create list with year values for ComboBox
+                int currentYear = Calendar.getInstance().get(Calendar.YEAR);
+                List<Integer> years = IntStream.rangeClosed(currentYear - 100, currentYear)
+                        // reverse order
+                        .map(i -> currentYear - i + currentYear - 100).boxed()
+                        .collect(Collectors.toList());
+
+                valueEditor = new ComboBox<Integer>(markupId, years).setType(Integer.class);
+                        
+            } 
+            else {
+                valueEditor = new TextField<>(markupId);
+            }
+
+            valueEditor.add(
+                    new LambdaAjaxFormComponentUpdatingBehavior("change", t -> t.add(getParent())));
+        
+            editorFragment.add(valueEditor);
+            return editorFragment;
+        }
     }
+    
+    public class DataTypeValidator<T> implements IValidator<Object> {
+
+        private static final long serialVersionUID = 3163644713929945135L;
+
+        public void validate(IValidatable<Object> validatable) {
+
+            ValidationError error = new ValidationError(this);
+            error.setVariable("Wrong DataType. Value: ", validatable.getValue());
+            validatable.error(error);
+            
+        }   
+    }
+    
 }

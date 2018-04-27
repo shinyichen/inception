@@ -342,6 +342,7 @@ public class KnowledgeBaseCreationWizard extends BootstrapWizard {
                 .collect(Collectors.toList());
             ComboBox<String> comboBox = new ComboBox<>(name, model.bind(name), choices);
             comboBox.setRequired(true);
+            comboBox.setEnabled(false);
             comboBox.add(EnrichedKnowledgeBaseUtils.URL_VALIDATOR);
             comboBox.setDefaultModelObject(choices.get(0));
             return comboBox;

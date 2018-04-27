@@ -155,7 +155,7 @@ public class KBStatement implements Serializable
         Value object;
         if (value instanceof IRI) {
             object = (IRI) value;
-        } else if (URIUtil.isValidURIReference((String) value)) {
+        } else if (URIUtil.isValidURIReference(value.toString())) {
             object = vf.createIRI((String) value);
         }
         else if (language != null) {
